@@ -1,0 +1,4 @@
+.env
+List.db
+__pycache__/
+*.pyc
