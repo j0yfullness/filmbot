@@ -352,7 +352,8 @@ async def show_series_episodes(chat_id, series_title, context, callback_query=No
         for i, ep in enumerate(episodes, 1):
             if (i - 1) % 3 == 0:
                 keyboard.append([])
-            keyboard[-1].append(InlineKeyboardButton(f"Eps {ep[3]}", callback_data=f"episode_{ep[0]}"))
+            label = ep[1].replace("Episode", "Eps", 1) if ep[1].startswith("Episode") else f"Eps {ep[3]}"
+            keyboard[-1].append(InlineKeyboardButton(label, callback_data=f"episode_{ep[0]}"))
         keyboard.append([InlineKeyboardButton("← Daftar Series", callback_data="back_series")])
 
         text = f"*{series_name}*\nPilih episode:"
