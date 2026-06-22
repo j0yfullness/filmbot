@@ -4,18 +4,9 @@ import asyncio
 from flask import Flask, request
 from telegram import Update
 
-PATH = os.path.dirname(os.path.abspath(__file__))
-if PATH not in sys.path:
-    sys.path.insert(0, PATH)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dotenv import load_dotenv
-load_dotenv(os.path.join(PATH, '.env'))
-
-from Filmbot import application
-
-TOKEN = os.environ.get("TOKEN", "")
-if not TOKEN:
-    raise ValueError("TOKEN tidak ditemukan!")
+from Filmbot import application, TOKEN
 
 flask_app = Flask(__name__)
 

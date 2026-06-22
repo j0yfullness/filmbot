@@ -762,10 +762,4 @@ application = Application.builder().token(TOKEN).updater(None).build()
 setup_webhook(application)
 asyncio.run(application.initialize())
 
-if __name__ == "__main__":
-    polling_app = Application.builder().token(TOKEN).build()
-    setup_webhook(polling_app)
-    print("Bot berhasil dijalankan dalam mode polling!")
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    polling_app.run_polling()
+
