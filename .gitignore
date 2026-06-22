@@ -2,3 +2,5 @@
 List.db
 __pycache__/
 *.pyc
+cookies*.txt
+login_page*.html

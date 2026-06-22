@@ -3,6 +3,7 @@ import os
 import re
 import sqlite3
 import json
+import asyncio
 from sqlite3 import Error
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,7 +13,8 @@ from telegram.ext import (
     ContextTypes,
     filters,
     MessageHandler,
-    CallbackQueryHandler
+    CallbackQueryHandler,
+    ChatMemberHandler
 )
 
 load_dotenv()
@@ -606,6 +608,80 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Error processing series caption: {e}")
             await message.reply_text("Terjadi kesalahan saat memproses caption series.")
+    else:
+        series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)', caption, re.IGNORECASE)
+        if series_match:
+            series_title = series_match.group(1).strip()
+            episode_number = int(series_match.group(2))
+            episode_title = f"Episode {episode_number}"
+            save_series_episode(episode_title, series_title, episode_number, message.chat_id, message.message_id)
+            await message.reply_text(f"Episode {episode_number} dari series '{series_title}' berhasil disimpan!")
+        else:
+            save_film(caption, message.chat_id, message.message_id)
+            await message.reply_text(f"Film '{caption}' berhasil disimpan!")
+
+
+def scan_updates(updates):
+    found = 0
+    series_found = 0
+    film_found = 0
+    for upd in updates:
+        msg = upd.message
+        if not msg or not msg.caption:
+            continue
+        if not any([msg.video, msg.document, msg.photo]):
+            continue
+        caption = msg.caption.strip()
+        series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)', caption, re.IGNORECASE)
+        if series_match:
+            series_title = series_match.group(1).strip()
+            episode_number = int(series_match.group(2))
+            episode_title = f"Episode {episode_number}"
+            save_series_episode(episode_title, series_title, episode_number, msg.chat_id, msg.message_id)
+            series_found += 1
+        else:
+            save_film(caption, msg.chat_id, msg.message_id)
+            film_found += 1
+        found += 1
+    return found, film_found, series_found
+
+
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Hanya admin yang bisa menggunakan perintah ini!")
+        return
+    await update.message.reply_text("Memulai scan grup...")
+    try:
+        updates = await context.bot.get_updates(allowed_updates=["message"])
+    except Exception as e:
+        await update.message.reply_text(f"Gagal mendapatkan updates: {e}")
+        return
+    found, film_found, series_found = scan_updates(updates)
+    if found > 0:
+        await update.message.reply_text(
+            f"Scan selesai!\nDitemukan: {found} file\n- Film: {film_found}\n- Series: {series_found}"
+        )
+    else:
+        await update.message.reply_text("Tidak ada file video ditemukan di pesan terbaru.")
+
+
+async def chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.my_chat_member.new_chat_member.status == "member":
+        chat = update.effective_chat
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Halo! Saya akan scan pesan terbaru untuk mencari file video..."
+        )
+        try:
+            updates = await context.bot.get_updates(allowed_updates=["message"])
+        except Exception as e:
+            logging.error(f"Scan on join failed: {e}")
+            return
+        found, film_found, series_found = scan_updates(updates)
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"Scan selesai! Ditemukan {found} file video (Film: {film_found}, Series: {series_found})."
+        )
 
 
 def save_film(title, chat_id, message_id, category=None):
@@ -675,6 +751,8 @@ def setup_webhook(app):
     app.add_handler(CommandHandler("hapus_film", delete_film_command))
     app.add_handler(CommandHandler("hapus_series", delete_series_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("scan", scan_command))
+    app.add_handler(ChatMemberHandler(chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.ALL, handle_media))
     return app
@@ -682,10 +760,12 @@ def setup_webhook(app):
 
 application = Application.builder().token(TOKEN).updater(None).build()
 setup_webhook(application)
-application.initialize()
+asyncio.run(application.initialize())
 
 if __name__ == "__main__":
     polling_app = Application.builder().token(TOKEN).build()
     setup_webhook(polling_app)
     print("Bot berhasil dijalankan dalam mode polling!")
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     polling_app.run_polling()
