@@ -296,72 +296,180 @@ async def film_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Tidak dapat terhubung ke database.")
 
 
+SERIES_PER_PAGE = 10
+
 async def series_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record_command_usage("series")
     args = context.args
-    if not args:
-        conn = create_connection()
-        if conn is not None:
-            try:
-                cursor = conn.cursor()
-                cursor.execute("SELECT DISTINCT series_title FROM series ORDER BY series_title")
-                unique_series = cursor.fetchall()
-                if not unique_series:
-                    await update.message.reply_text("Belum ada series yang tersimpan dalam database.")
-                    return
-                series_list = "\U0001f4fa *DAFTAR SERIES*\n\n"
-                for i, series in enumerate(unique_series, 1):
-                    series_list += f"{i}. {series[0]}\n"
-                series_list += "\nUntuk melihat episode, ketik `/series [judul series]`"
-                await update.message.reply_text(series_list, parse_mode="Markdown")
-            except Error as e:
-                logging.error(f"Database error: {e}")
-                await update.message.reply_text("Terjadi kesalahan saat mengakses database.")
-            finally:
-                conn.close()
-        else:
-            await update.message.reply_text("Tidak dapat terhubung ke database.")
-    else:
+    if args:
         search_title = " ".join(args)
-        conn = create_connection()
-        if conn is not None:
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id, title, series_title, episode_number FROM series WHERE series_title LIKE ? COLLATE NOCASE ORDER BY episode_number",
-                    (f"%{search_title}%",)
-                )
-                episodes = cursor.fetchall()
-                if episodes:
-                    series_title = episodes[0][2]
-                    keyboard = []
-                    for i, episode in enumerate(episodes, 1):
-                        if (i - 1) % 3 == 0:
-                            keyboard.append([])
-                        callback_data = f"episode_{episode[0]}"
-                        keyboard[-1].append(InlineKeyboardButton(f"Eps {episode[3]}", callback_data=callback_data))
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    await update.message.reply_text(
-                        f"Series: *{series_title}*\nPilih episode yang ingin ditonton:",
-                        reply_markup=reply_markup,
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await update.message.reply_text(f"Series dengan judul '{search_title}' tidak ditemukan.")
-            except Error as e:
-                logging.error(f"Database error: {e}")
-                await update.message.reply_text("Terjadi kesalahan saat mencari series.")
-            finally:
-                conn.close()
+        await show_series_episodes(update.effective_chat.id, search_title, context)
+    else:
+        await show_series_list(update.effective_chat.id, context, page=0)
+
+
+async def show_series_list(chat_id, context, page=0):
+    conn = create_connection()
+    if conn is None:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(DISTINCT series_title) FROM series")
+        total = cursor.fetchone()[0]
+        if total == 0:
+            await context.bot.send_message(chat_id, "Belum ada series yang tersimpan dalam database.")
+            return
+
+        cursor.execute("SELECT DISTINCT series_title FROM series ORDER BY series_title LIMIT ? OFFSET ?",
+                       (SERIES_PER_PAGE, page * SERIES_PER_PAGE))
+        series = cursor.fetchall()
+        total_pages = (total + SERIES_PER_PAGE - 1) // SERIES_PER_PAGE
+
+        keyboard = []
+        for s in series:
+            title = s[0][:35]
+            keyboard.append([InlineKeyboardButton(title, callback_data=f"sel_series_{s[0]}")])
+
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅", callback_data=f"series_page_{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton("➡", callback_data=f"series_page_{page+1}"))
+        if nav:
+            keyboard.append(nav)
+
+        await context.bot.send_message(
+            chat_id, "\U0001f4fa *DAFTAR SERIES*\nPilih series:",
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+        )
+    except Error as e:
+        logging.error(f"Database error: {e}")
+    finally:
+        conn.close()
+
+
+async def show_series_episodes(chat_id, series_title, context, callback_query=None):
+    conn = create_connection()
+    if conn is None:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, title, series_title, episode_number FROM series WHERE series_title LIKE ? COLLATE NOCASE ORDER BY episode_number",
+            (f"%{series_title}%",)
+        )
+        episodes = cursor.fetchall()
+        if not episodes:
+            msg = f"Series '{series_title}' tidak ditemukan."
+            if callback_query:
+                await callback_query.edit_message_text(msg)
+            else:
+                await context.bot.send_message(chat_id, msg)
+            return
+
+        series_name = episodes[0][2]
+        keyboard = []
+        for i, ep in enumerate(episodes, 1):
+            if (i - 1) % 3 == 0:
+                keyboard.append([])
+            keyboard[-1].append(InlineKeyboardButton(f"Eps {ep[3]}", callback_data=f"episode_{ep[0]}"))
+        keyboard.append([InlineKeyboardButton("← Daftar Series", callback_data="back_series")])
+
+        text = f"*{series_name}*\nPilih episode:"
+        if callback_query:
+            await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
-            await update.message.reply_text("Tidak dapat terhubung ke database.")
+            await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    except Error as e:
+        logging.error(f"Database error: {e}")
+    finally:
+        conn.close()
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data.startswith("episode_"):
-        episode_id = query.data.split("_")[1]
+    data = query.data
+
+    if data == "noop":
+        return
+
+    if data.startswith("sel_series_"):
+        series_title = data[11:]
+        await show_series_episodes(query.message.chat_id, series_title, context, callback_query=query)
+
+    elif data.startswith("series_page_"):
+        page = int(data.split("_")[2])
+        conn = create_connection()
+        if conn is None:
+            return
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(DISTINCT series_title) FROM series")
+            total = cursor.fetchone()[0]
+            cursor.execute("SELECT DISTINCT series_title FROM series ORDER BY series_title LIMIT ? OFFSET ?",
+                           (SERIES_PER_PAGE, page * SERIES_PER_PAGE))
+            series = cursor.fetchall()
+            total_pages = (total + SERIES_PER_PAGE - 1) // SERIES_PER_PAGE
+
+            keyboard = []
+            for s in series:
+                title = s[0][:35]
+                keyboard.append([InlineKeyboardButton(title, callback_data=f"sel_series_{s[0]}")])
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅", callback_data=f"series_page_{page-1}"))
+            nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton("➡", callback_data=f"series_page_{page+1}"))
+            if nav:
+                keyboard.append(nav)
+
+            await query.edit_message_text(
+                "\U0001f4fa *DAFTAR SERIES*\nPilih series:",
+                reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+            )
+        except Error as e:
+            logging.error(e)
+        finally:
+            conn.close()
+
+    elif data == "back_series":
+        await query.edit_message_text("Memuat daftar series...")
+        conn = create_connection()
+        if conn is not None:
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(DISTINCT series_title) FROM series")
+                total = cursor.fetchone()[0]
+                cursor.execute("SELECT DISTINCT series_title FROM series ORDER BY series_title LIMIT ? OFFSET 0",
+                               (SERIES_PER_PAGE,))
+                series = cursor.fetchall()
+                total_pages = (total + SERIES_PER_PAGE - 1) // SERIES_PER_PAGE
+
+                keyboard = []
+                for s in series:
+                    title = s[0][:35]
+                    keyboard.append([InlineKeyboardButton(title, callback_data=f"sel_series_{s[0]}")])
+                nav = []
+                nav.append(InlineKeyboardButton(f"1/{total_pages}", callback_data="noop"))
+                if total_pages > 1:
+                    nav.append(InlineKeyboardButton("➡", callback_data="series_page_1"))
+                if nav:
+                    keyboard.append(nav)
+
+                await query.edit_message_text(
+                    "\U0001f4fa *DAFTAR SERIES*\nPilih series:",
+                    reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+                )
+            except Error as e:
+                logging.error(e)
+            finally:
+                conn.close()
+
+    elif data.startswith("episode_"):
+        episode_id = data.split("_")[1]
         conn = create_connection()
         if conn is not None:
             try:
@@ -385,7 +493,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await query.message.reply_text("Episode tidak ditemukan.")
             except Error as e:
-                logging.error(f"Database error: {e}")
+                logging.error(e)
                 await query.message.reply_text("Terjadi kesalahan saat mengakses database.")
             finally:
                 conn.close()
