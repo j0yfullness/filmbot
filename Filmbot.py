@@ -804,11 +804,12 @@ async def tambah_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Gunakan:\n/tambah [judul]\n/tambah [judul] EP [nomor]")
         return
     caption = " ".join(args)
-    series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)', caption, re.IGNORECASE)
+    series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)(.*)', caption, re.IGNORECASE)
     if series_match:
         series_title = series_match.group(1).strip()
         episode_number = int(series_match.group(2))
-        episode_title = f"Episode {episode_number}"
+        suffix = series_match.group(3).strip()
+        episode_title = f"Episode {episode_number} {suffix}".strip() if suffix else f"Episode {episode_number}"
         save_series_episode(episode_title, series_title, episode_number, msg.chat_id, msg.message_id)
         await update.message.reply_text(f"Episode {episode_number} dari series '{series_title}' berhasil ditambahkan!")
     else:
@@ -843,11 +844,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Error processing series caption: {e}")
             await message.reply_text("Terjadi kesalahan saat memproses caption series.")
     else:
-        series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)', caption, re.IGNORECASE)
+        series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)(.*)', caption, re.IGNORECASE)
         if series_match:
             series_title = series_match.group(1).strip()
             episode_number = int(series_match.group(2))
-            episode_title = f"Episode {episode_number}"
+            suffix = series_match.group(3).strip()
+            episode_title = f"Episode {episode_number} {suffix}".strip() if suffix else f"Episode {episode_number}"
             save_series_episode(episode_title, series_title, episode_number, message.chat_id, message.message_id)
             await message.reply_text(f"Episode {episode_number} dari series '{series_title}' berhasil disimpan!")
         else:
@@ -866,11 +868,12 @@ def scan_updates(updates):
         if not any([msg.video, msg.document, msg.photo]):
             continue
         caption = msg.caption.strip()
-        series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)', caption, re.IGNORECASE)
+        series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)(.*)', caption, re.IGNORECASE)
         if series_match:
             series_title = series_match.group(1).strip()
             episode_number = int(series_match.group(2))
-            episode_title = f"Episode {episode_number}"
+            suffix = series_match.group(3).strip()
+            episode_title = f"Episode {episode_number} {suffix}".strip() if suffix else f"Episode {episode_number}"
             save_series_episode(episode_title, series_title, episode_number, msg.chat_id, msg.message_id)
             series_found += 1
         else:
