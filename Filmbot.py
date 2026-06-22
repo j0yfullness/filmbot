@@ -582,6 +582,34 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Tidak dapat terhubung ke database.")
 
 
+async def tambah_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("Hanya admin yang bisa menggunakan perintah ini!")
+        return
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Reply pesan video/film yang ingin ditambahkan dengan perintah ini.")
+        return
+    msg = update.message.reply_to_message
+    if not any([msg.video, msg.document, msg.photo]):
+        await update.message.reply_text("Pesan yang di-reply bukan video/gambar.")
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Gunakan:\n/tambah [judul]\n/tambah [judul] EP [nomor]")
+        return
+    caption = " ".join(args)
+    series_match = re.match(r'(.+?)\s+(?:EP|Episode|Ep)\s*(\d+)', caption, re.IGNORECASE)
+    if series_match:
+        series_title = series_match.group(1).strip()
+        episode_number = int(series_match.group(2))
+        episode_title = f"Episode {episode_number}"
+        save_series_episode(episode_title, series_title, episode_number, msg.chat_id, msg.message_id)
+        await update.message.reply_text(f"Episode {episode_number} dari series '{series_title}' berhasil ditambahkan!")
+    else:
+        save_film(caption, msg.chat_id, msg.message_id)
+        await update.message.reply_text(f"Film '{caption}' berhasil ditambahkan!")
+
+
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.caption:
@@ -751,6 +779,7 @@ def setup_webhook(app):
     app.add_handler(CommandHandler("hapus_film", delete_film_command))
     app.add_handler(CommandHandler("hapus_series", delete_series_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("tambah", tambah_command))
     app.add_handler(CommandHandler("scan", scan_command))
     app.add_handler(ChatMemberHandler(chat_member_update, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(button_callback))
