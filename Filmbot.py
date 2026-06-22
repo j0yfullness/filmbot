@@ -240,30 +240,7 @@ async def masukan_kategori_command(update: Update, context: ContextTypes.DEFAULT
 async def film_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record_command_usage("film")
     args = context.args
-    if not args:
-        conn = create_connection()
-        if conn is not None:
-            try:
-                cursor = conn.cursor()
-                cursor.execute("SELECT title, category FROM films ORDER BY title")
-                films = cursor.fetchall()
-                if not films:
-                    await update.message.reply_text("Belum ada film yang tersimpan dalam database.")
-                    return
-                film_list = "\U0001f3ac *DAFTAR FILM*\n\n"
-                for i, film in enumerate(films, 1):
-                    category = f" ({film[1]})" if film[1] else ""
-                    film_list += f"{i}. {film[0]}{category}\n"
-                film_list += "\nUntuk menonton film, ketik `/film [judul film]`"
-                await update.message.reply_text(film_list, parse_mode="Markdown")
-            except Error as e:
-                logging.error(f"Database error: {e}")
-                await update.message.reply_text("Terjadi kesalahan saat mengakses database.")
-            finally:
-                conn.close()
-        else:
-            await update.message.reply_text("Tidak dapat terhubung ke database.")
-    else:
+    if args:
         search_title = " ".join(args)
         record_film_search(search_title)
         conn = create_connection()
@@ -294,6 +271,8 @@ async def film_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.close()
         else:
             await update.message.reply_text("Tidak dapat terhubung ke database.")
+    else:
+        await show_film_list(update.effective_chat.id, context, page=0)
 
 
 SERIES_PER_PAGE = 10
@@ -387,12 +366,131 @@ async def show_series_episodes(chat_id, series_title, context, callback_query=No
         conn.close()
 
 
+FILM_PER_PAGE = 10
+
+async def show_film_list(chat_id, context, page=0):
+    conn = create_connection()
+    if conn is None:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM films")
+        total = cursor.fetchone()[0]
+        if total == 0:
+            await context.bot.send_message(chat_id, "Belum ada film yang tersimpan dalam database.")
+            return
+
+        cursor.execute("SELECT id, title FROM films ORDER BY title LIMIT ? OFFSET ?",
+                       (FILM_PER_PAGE, page * FILM_PER_PAGE))
+        films = cursor.fetchall()
+        total_pages = (total + FILM_PER_PAGE - 1) // FILM_PER_PAGE
+
+        keyboard = []
+        for f in films:
+            title = f[1][:35]
+            keyboard.append([InlineKeyboardButton(title, callback_data=f"sel_film_{f[0]}")])
+
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅", callback_data=f"film_page_{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton("➡", callback_data=f"film_page_{page+1}"))
+        if nav:
+            keyboard.append(nav)
+
+        await context.bot.send_message(
+            chat_id, "\U0001f3ac *DAFTAR FILM*\nPilih film:",
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+        )
+    except Error as e:
+        logging.error(f"Database error: {e}")
+    finally:
+        conn.close()
+
+
+async def show_film_list_paginated(query, page=0):
+    conn = create_connection()
+    if conn is None:
+        return
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM films")
+        total = cursor.fetchone()[0]
+        if total == 0:
+            await query.edit_message_text("Belum ada film yang tersimpan dalam database.")
+            return
+
+        cursor.execute("SELECT id, title FROM films ORDER BY title LIMIT ? OFFSET ?",
+                       (FILM_PER_PAGE, page * FILM_PER_PAGE))
+        films = cursor.fetchall()
+        total_pages = (total + FILM_PER_PAGE - 1) // FILM_PER_PAGE
+
+        keyboard = []
+        for f in films:
+            title = f[1][:35]
+            keyboard.append([InlineKeyboardButton(title, callback_data=f"sel_film_{f[0]}")])
+
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅", callback_data=f"film_page_{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton("➡", callback_data=f"film_page_{page+1}"))
+        if nav:
+            keyboard.append(nav)
+
+        await query.edit_message_text(
+            "\U0001f3ac *DAFTAR FILM*\nPilih film:",
+            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+        )
+    except Error as e:
+        logging.error(e)
+    finally:
+        conn.close()
+
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
 
     if data == "noop":
+        return
+
+    if data.startswith("sel_film_"):
+        film_id = int(data.split("_")[2])
+        conn = create_connection()
+        if conn is not None:
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT title, chat_id, message_id FROM films WHERE id = ?", (film_id,))
+                film = cursor.fetchone()
+                if film:
+                    await query.edit_message_text(f"Mengirimkan film: {film[0]}")
+                    try:
+                        await context.bot.forward_message(
+                            chat_id=query.message.chat_id,
+                            from_chat_id=film[1],
+                            message_id=film[2]
+                        )
+                    except Exception as e:
+                        await query.message.reply_text(f"Gagal meneruskan film: {e}")
+                else:
+                    await query.edit_message_text("Film tidak ditemukan.")
+            except Error as e:
+                logging.error(e)
+            finally:
+                conn.close()
+        return
+
+    if data.startswith("film_page_"):
+        page = int(data.split("_")[2])
+        await show_film_list_paginated(query, page)
+        return
+
+    if data == "back_film":
+        await show_film_list_paginated(query, 0)
         return
 
     if data.startswith("sel_series_"):
